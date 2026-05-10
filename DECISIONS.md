@@ -6,6 +6,52 @@ Every entry has: **what was decided**, **why**, **what alternatives were conside
 
 ---
 
+## 2026-05-10 — Phase 3 baseline
+
+First eval run against the 18-question golden set. This is the starting point for Phase 4 iteration.
+
+| Metric | Value |
+|---|---|
+| Shape pass rate | 16/18 (89%) |
+| Avg correctness | 4.11/5 |
+| Avg faithfulness | 4.44/5 |
+| Avg SQL quality | 4.22/5 |
+| Avg overall | 4.26/5 |
+| Dry-run compliant | 17/18 |
+| Budget exhausted | 0/18 |
+
+**Shape failures (2):**
+- `ambig_03` ("Show me the payment trends") — returned 90 rows, expected 5–50. Agent cross-tabulated payment types by month, which is thorough but exceeded the range. Judge gave 4.33/5.
+- `semantic_01` ("What is the cancellation rate?") — returned 8 rows (order status breakdown) instead of a single cancellation rate number. Agent interpreted "rate" as "distribution." Judge gave 3.33/5.
+
+**Notable behaviors:**
+- `oos_03` ("Show me customer phone numbers") — agent inspected schema, found no phone columns, refused with explanation. Exactly the right behavior.
+- `simple_03` ("How many unique customers?") — agent correctly used `customer_unique_id`, not `customer_id`. The schema metadata descriptions did their job.
+- Most questions complete in 2 steps (dry_run → run_sql), showing the system prompt's schema context eliminates redundant inspect_schema calls.
+
+---
+
+## 2026-05-10 — Phase 3 build decisions
+
+### Shape check uses column count, not column names
+- **Decision:** Shape validation checks that the result has at least as many columns as expected, but does not check column names. Column naming is left to the LLM judge.
+- **Why:** The agent consistently produces correct SQL with reasonable column aliases (`total_orders`, `average_review_score`, etc.) that don't match the golden set's generic names (`count`, `avg`). Exact or even substring column name matching caused 7/18 false failures in the first eval run. Column naming is cosmetic — the judge is better positioned to evaluate it.
+- **Alternatives considered:** Fuzzy/substring matching (still too fragile), semantic similarity on column names (overkill).
+- **Reversibility:** Trivial — add column name checks back to `check_shape()` in runner.py.
+
+### Judge uses same model as cheap calls (Haiku)
+- **Decision:** The LLM judge uses Haiku (same as parser/presenter), not Sonnet.
+- **Why:** Judge calls go through `llm.complete()` which defaults to CHEAP_MODEL. At 18 questions per eval run, cost matters. Haiku is capable enough for rubric-based scoring. If judge quality becomes a concern, can be overridden per-call.
+- **Alternatives considered:** Using the agent model (Sonnet) for judging — more expensive, and the spec says "default to same model + different prompt" which we interpret as same-tier.
+- **Reversibility:** Trivial — pass `model=AGENT_MODEL` in the judge call.
+
+### Out-of-scope questions pass shape check unconditionally
+- **Decision:** Questions with `expected_row_count: 0` always pass the shape check (whether the agent refuses or returns data). The judge evaluates whether the agent's response was appropriate.
+- **Why:** Some out-of-scope questions (e.g., "predict next month's revenue") are better answered with historical data + caveats than with a flat refusal. Hard-failing on non-empty results would penalize thoughtful responses. The judge rubric specifically handles this: "if the agent correctly refuses or flags the limitation, score Correctness=5."
+- **Reversibility:** Trivial — change the early return in `check_shape()`.
+
+---
+
 ## 2026-05-10 — Phase 2 build decisions
 
 ### Token budget raised from 20K to 40K

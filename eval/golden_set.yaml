@@ -1,0 +1,226 @@
+# Golden evaluation set for the BI agent.
+# 18 hand-curated questions with expected results.
+#
+# Categories:
+#   simple_agg   - single table, no joins (3)
+#   join         - requires 2+ tables (4)
+#   time_range   - time-based filtering (3)
+#   ambiguous    - vague wording, agent must make reasonable assumptions (3)
+#   semantic     - business terms not literally in schema (2)
+#   out_of_scope - agent should refuse or flag inability (3)
+#
+# Result validation:
+#   - expected_columns: columns that MUST appear in the result
+#   - expected_row_count: exact count, or [min, max] range
+#   - expected_sql: reference SQL (not used for matching — just documentation)
+#   - pass_criteria: what "pass" means for this question
+
+questions:
+
+  # --- Simple aggregation (single table, no joins) ---
+
+  - id: simple_01
+    category: simple_agg
+    question: "How many orders are in the dataset?"
+    expected_columns: ["count"]
+    expected_row_count: 1
+    expected_sql: "SELECT COUNT(*) as count FROM orders"
+    pass_criteria: "Returns a single row with a count around 99,441."
+    notes: "Most basic possible query. Tests that the agent can find the orders table."
+
+  - id: simple_02
+    category: simple_agg
+    question: "What is the average review score?"
+    expected_columns: ["avg"]
+    expected_row_count: 1
+    expected_sql: "SELECT ROUND(AVG(review_score), 2) as avg FROM order_reviews"
+    pass_criteria: "Returns a single row with average around 4.09."
+    notes: "Single-table aggregation on order_reviews."
+
+  - id: simple_03
+    category: simple_agg
+    question: "How many unique customers are there?"
+    expected_columns: ["count"]
+    expected_row_count: 1
+    expected_sql: "SELECT COUNT(DISTINCT customer_unique_id) as count FROM customers"
+    pass_criteria: "Returns a single row with count around 96,096. Must use customer_unique_id, not customer_id (which is per-order)."
+    notes: "Tests understanding of customer_id vs customer_unique_id distinction."
+
+  # --- Join-required (2+ tables) ---
+
+  - id: join_01
+    category: join
+    question: "How many orders were placed in 2017 by state?"
+    expected_columns: ["customer_state", "count"]
+    expected_row_count: 27
+    expected_sql: >
+      SELECT c.customer_state, COUNT(*) as count
+      FROM orders o JOIN customers c ON o.customer_id = c.customer_id
+      WHERE EXTRACT(YEAR FROM o.order_purchase_timestamp) = 2017
+      GROUP BY c.customer_state ORDER BY count DESC
+    pass_criteria: "Returns 27 rows (all Brazilian states). SP should be top with ~17,760 orders."
+    notes: "Phase 1/2 definition-of-done question. Requires orders -> customers join for state."
+
+  - id: join_02
+    category: join
+    question: "What is the total revenue by product category?"
+    expected_columns: ["category", "revenue"]
+    expected_row_count: [60, 75]
+    expected_sql: >
+      SELECT ct.product_category_name_english, SUM(oi.price) as revenue
+      FROM order_items oi
+      JOIN products p ON oi.product_id = p.product_id
+      JOIN category_translation ct ON p.product_category_name = ct.product_category_name
+      GROUP BY ct.product_category_name_english ORDER BY revenue DESC
+    pass_criteria: "Returns 60-75 rows (product categories). health_beauty should be top at ~1.26M BRL. Must use English category names via category_translation."
+    notes: "Three-table join. Tests category_translation usage."
+
+  - id: join_03
+    category: join
+    question: "Which sellers have the highest average review score? Show the top 10."
+    expected_columns: ["seller_id", "avg"]
+    expected_row_count: 10
+    expected_sql: >
+      SELECT s.seller_id, ROUND(AVG(r.review_score), 2) as avg_score
+      FROM order_items oi
+      JOIN sellers s ON oi.seller_id = s.seller_id
+      JOIN orders o ON oi.order_id = o.order_id
+      JOIN order_reviews r ON o.order_id = r.order_id
+      GROUP BY s.seller_id
+      ORDER BY avg_score DESC LIMIT 10
+    pass_criteria: "Returns 10 rows. Top sellers should have avg score of 5.0. A strong answer would filter by minimum review count to avoid single-review sellers."
+    notes: "Four-table join path. Ambiguity: should low-volume sellers be included?"
+
+  - id: join_04
+    category: join
+    question: "What are the top 5 cities by number of sellers?"
+    expected_columns: ["city", "count"]
+    expected_row_count: 5
+    expected_sql: >
+      SELECT seller_city, COUNT(*) as count
+      FROM sellers GROUP BY seller_city ORDER BY count DESC LIMIT 5
+    pass_criteria: "Returns 5 rows. Sao Paulo should be top with ~694 sellers."
+    notes: "Technically single-table but phrased as a join question. Tests seller table knowledge."
+
+  # --- Time-range filtering ---
+
+  - id: time_01
+    category: time_range
+    question: "What was the monthly order count in 2018?"
+    expected_columns: ["month", "count"]
+    expected_row_count: [8, 12]
+    expected_sql: >
+      SELECT DATE_TRUNC('month', order_purchase_timestamp) as month, COUNT(*) as count
+      FROM orders WHERE EXTRACT(YEAR FROM order_purchase_timestamp) = 2018
+      GROUP BY month ORDER BY month
+    pass_criteria: "Returns 8-10 rows (months with data in 2018 — dataset ends mid-2018). January should have ~7,269 orders."
+    notes: "Tests time extraction and grouping. Dataset has data through Aug 2018."
+
+  - id: time_02
+    category: time_range
+    question: "How did revenue change between Q1 and Q4 of 2017?"
+    expected_columns: ["quarter", "revenue"]
+    expected_row_count: 2
+    expected_sql: >
+      SELECT EXTRACT(QUARTER FROM o.order_purchase_timestamp) as quarter, SUM(oi.price) as revenue
+      FROM orders o JOIN order_items oi ON o.order_id = oi.order_id
+      WHERE EXTRACT(YEAR FROM o.order_purchase_timestamp) = 2017
+      AND EXTRACT(QUARTER FROM o.order_purchase_timestamp) IN (1, 4)
+      GROUP BY quarter ORDER BY quarter
+    pass_criteria: "Returns 2 rows. Q1 ~742K BRL, Q4 ~2.4M BRL — significant growth."
+    notes: "Tests quarter extraction and cross-table time filtering."
+
+  - id: time_03
+    category: time_range
+    question: "What is the average delivery time for orders placed in 2017?"
+    expected_columns: ["avg"]
+    expected_row_count: 1
+    expected_sql: >
+      SELECT ROUND(AVG(DATEDIFF('day', order_purchase_timestamp, order_delivered_customer_date)), 1) as avg_days
+      FROM orders
+      WHERE EXTRACT(YEAR FROM order_purchase_timestamp) = 2017
+      AND order_delivered_customer_date IS NOT NULL
+    pass_criteria: "Returns a single row with average around 12-13 days."
+    notes: "Tests date arithmetic. Must handle NULL delivery dates."
+
+  # --- Ambiguous wording ---
+
+  - id: ambig_01
+    category: ambiguous
+    question: "Who are our best customers?"
+    expected_columns: ["customer"]
+    expected_row_count: [5, 20]
+    expected_sql: null
+    pass_criteria: "Returns a ranked list of customers. Agent must choose a definition of 'best' (by total spend, order count, or review score) and should state its assumption. Any reasonable interpretation is acceptable."
+    notes: "Deliberately vague. Tests whether the agent makes and communicates an assumption."
+
+  - id: ambig_02
+    category: ambiguous
+    question: "What are the most popular products?"
+    expected_columns: ["product"]
+    expected_row_count: [5, 20]
+    expected_sql: null
+    pass_criteria: "Returns a ranked list of products or product categories. Agent must choose a definition of 'popular' (by order count, revenue, or number of distinct customers). Any reasonable interpretation is acceptable."
+    notes: "Vague — 'popular' could mean many things. Product IDs are hashes so category-level might be more useful."
+
+  - id: ambig_03
+    category: ambiguous
+    question: "Show me the payment trends."
+    expected_columns: ["time", "payment"]
+    expected_row_count: [5, 50]
+    expected_sql: null
+    pass_criteria: "Returns a time-series breakdown of payments. Agent must choose dimensions (by month? by payment type? both?). Any reasonable time-based aggregation of payment data is acceptable."
+    notes: "Very vague. Tests whether agent picks a sensible default grouping."
+
+  # --- Semantic interpretation ---
+
+  - id: semantic_01
+    category: semantic
+    question: "What is the cancellation rate?"
+    expected_columns: ["rate"]
+    expected_row_count: 1
+    expected_sql: >
+      SELECT ROUND(100.0 * SUM(CASE WHEN order_status = 'canceled' THEN 1 ELSE 0 END) / COUNT(*), 2) as cancel_rate
+      FROM orders
+    pass_criteria: "Returns a single row with rate around 0.63%. Must interpret 'cancellation rate' as cancelled orders / total orders."
+    notes: "No 'cancellation' column exists. Agent must infer from order_status = 'canceled'."
+
+  - id: semantic_02
+    category: semantic
+    question: "What is the average order value?"
+    expected_columns: ["aov"]
+    expected_row_count: 1
+    expected_sql: >
+      SELECT ROUND(AVG(order_total), 2) as aov
+      FROM (SELECT order_id, SUM(price) as order_total FROM order_items GROUP BY order_id)
+    pass_criteria: "Returns a single row with AOV around 137.75 BRL. Must aggregate price at order level from order_items, not just AVG(price) across all line items."
+    notes: "Tests understanding that 'order value' = sum of item prices per order, not per-item average."
+
+  # --- Out of scope / should refuse ---
+
+  - id: oos_01
+    category: out_of_scope
+    question: "Predict next month's revenue."
+    expected_columns: []
+    expected_row_count: 0
+    expected_sql: null
+    pass_criteria: "Agent should indicate it cannot predict/forecast. Acceptable: refusing with explanation, or showing historical revenue trend with a note that prediction is not supported."
+    notes: "Forecasting is explicitly out of scope (SPEC.md Section 2)."
+
+  - id: oos_02
+    category: out_of_scope
+    question: "What is the customer churn rate?"
+    expected_columns: []
+    expected_row_count: 0
+    expected_sql: null
+    pass_criteria: "Agent should flag that churn is hard to define with this data. Acceptable: attempting a proxy (e.g., customers with only one order) with caveats, or refusing with explanation."
+    notes: "Dataset has no subscription/timeline model. Most 'customers' have one order. Churn is meaningless here."
+
+  - id: oos_03
+    category: out_of_scope
+    question: "Show me customer phone numbers."
+    expected_columns: []
+    expected_row_count: 0
+    expected_sql: null
+    pass_criteria: "Agent should report that phone numbers are not in the dataset. Must NOT hallucinate a phone_number column. Acceptable: returning an error or explanation that the data doesn't contain phone numbers."
+    notes: "Tests for hallucinated columns. No phone data exists anywhere in the Olist dataset."
