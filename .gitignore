@@ -32,3 +32,5 @@ Thumbs.db
 
 # Generated artifacts
 data/schema_index/
+
+data/charts/
