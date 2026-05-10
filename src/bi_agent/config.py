@@ -17,3 +17,7 @@ SCHEMA_INDEX_DIR = DATA_DIR / "schema_index"
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 RETRIEVER_TOP_K = 4
 SAMPLE_ROWS_N = 5
+
+# LLM models (Phase 2)
+AGENT_MODEL = "claude-sonnet-4-20250514"
+CHEAP_MODEL = "claude-haiku-4-5-20251001"

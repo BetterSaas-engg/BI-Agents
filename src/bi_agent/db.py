@@ -145,9 +145,7 @@ class DuckDBDatabase:
         if table not in tables:
             raise ValueError(f"Table '{table}' not found. Available: {tables}")
 
-        return self._conn.execute(
-            f'SELECT * FROM "{table}" LIMIT ?', [n]
-        ).fetchdf()
+        return self._conn.execute(f'SELECT * FROM "{table}" LIMIT ?', [n]).fetchdf()
 
     def dry_run(self, sql: str) -> str:
         """Validate SQL via EXPLAIN without executing it."""

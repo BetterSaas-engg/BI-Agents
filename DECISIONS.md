@@ -6,6 +6,32 @@ Every entry has: **what was decided**, **why**, **what alternatives were conside
 
 ---
 
+## 2026-05-10 — Phase 2 build decisions
+
+### Token budget raised from 20K to 40K
+- **Decision:** Increased the SQL agent's max_total_tokens from 20,000 (spec default) to 40,000.
+- **Why:** The system prompt includes full schema context (~3K tokens of table descriptions, column types, and sample rows). Each LLM round-trip costs ~4K input tokens because this context is re-sent. At 20K, the agent hit the budget after 5 tool calls (inspect_schema x2, sample_rows x2, dry_run) before it could call run_sql — even though it had valid SQL. With the improved prompt telling the agent to skip redundant inspect_schema calls, typical queries now complete in 2-3 steps (~7K tokens), but 40K gives headroom for harder queries that need repair loops.
+- **Alternatives considered:** Keep 20K and reduce system prompt size (would lose valuable schema context), or remove the token budget entirely (too risky for runaway loops).
+- **Reversibility:** Trivial — change `MAX_TOTAL_TOKENS` in sql_agent.py.
+
+### Agent prompt includes full schema context
+- **Decision:** The SQL agent's system prompt includes table descriptions, column types/descriptions, and sample rows from the retriever output. The agent is instructed to use this context directly and only call inspect_schema/sample_rows if it needs additional detail.
+- **Why:** Without this, the agent redundantly called inspect_schema and sample_rows on every table before writing SQL, burning 4 of its 6 iteration budget on information it already had. With the schema in the system prompt, the agent typically goes straight to dry_run + run_sql (2 steps).
+- **Alternatives considered:** Remove inspect_schema/sample_rows tools entirely (too aggressive — agent may legitimately need more detail for complex queries).
+- **Reversibility:** High — edit the system prompt in sql_agent.py.
+
+### No hard gate on dry_run before run_sql
+- **Decision:** The agent is instructed (via system prompt) to always dry_run before run_sql, but this is not enforced in code. Instead, the trace logs whether each run_sql call was preceded by a successful dry_run.
+- **Why:** Hard-gating requires tracking state (which SQL strings have been dry-run'd) and blocking tool calls — complexity that doesn't teach anything. The soft approach lets us observe compliance via traces, which is itself a learning moment about agent instruction-following. Per SPEC.md Section 7, this was an open decision.
+- **Reversibility:** Medium — adding a hard gate later is straightforward.
+
+### Model IDs: claude-sonnet-4 for agent, claude-haiku-4-5 for cheap calls
+- **Decision:** Using `claude-sonnet-4-20250514` for the SQL agent and `claude-haiku-4-5-20251001` for parser/explanation. Centralized in config.py as AGENT_MODEL and CHEAP_MODEL.
+- **Why:** CLAUDE.md specifies Sonnet for agent and Haiku for cheap steps. These are the model IDs available on the current API key. Centralized in config.py so swapping is a one-line change.
+- **Reversibility:** Trivial — change in config.py.
+
+---
+
 ## 2026-05-10 — Phase 1 build decisions
 
 ### Table-level embedding granularity
