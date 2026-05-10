@@ -1,0 +1,267 @@
+# Schema metadata for the Olist Brazilian E-Commerce dataset.
+# Descriptions grounded in the official Olist/Kaggle dataset documentation.
+# Items marked [NEEDS REVIEW] could not be confirmed from official docs.
+#
+# This file is the primary input for schema grounding (embedding index).
+# Hand-curated — do not auto-generate.
+
+tables:
+
+  customers:
+    description: >
+      Customer dimension table. Each row is a unique customer_id associated with
+      a single order. The same real-world customer may appear multiple times with
+      different customer_id values but the same customer_unique_id. Use this table
+      to look up customer location (city, state, zip) and to join orders to
+      geographic data.
+    columns:
+      customer_id:
+        description: >
+          Surrogate key for the customer in this dataset. Unique per order —
+          the same physical customer gets a new customer_id for each order.
+          Joins to orders.customer_id.
+        examples: ["06b8999e2fba1a1fbc88172c00ba8bc7"]
+      customer_unique_id:
+        description: >
+          Unique identifier for the actual customer (person). Use this to
+          count distinct customers or identify repeat buyers across orders.
+        examples: ["861eff4711a542e4b93843c6dd7febb0"]
+      customer_zip_code_prefix:
+        description: >
+          First 5 digits of the customer's zip code. Joins to
+          geolocation.geolocation_zip_code_prefix for lat/lng lookup.
+        examples: ["14409", "09790", "01151"]
+      customer_city:
+        description: "Customer's city name (lowercase Portuguese)."
+        examples: ["franca", "sao bernardo do campo", "sao paulo"]
+      customer_state:
+        description: "Customer's state abbreviation (2-letter Brazilian state code)."
+        examples: ["SP", "RJ", "MG"]
+
+  sellers:
+    description: >
+      Seller dimension table. Each row is a unique seller registered on the
+      Olist marketplace. Sellers fulfill individual order items. Use this table
+      to look up seller location and to aggregate sales performance per seller.
+    columns:
+      seller_id:
+        description: "Unique identifier for the seller. Joins to order_items.seller_id."
+        examples: ["3442f8959a84dea7ee197c632cb2df15"]
+      seller_zip_code_prefix:
+        description: >
+          First 5 digits of the seller's zip code. Joins to
+          geolocation.geolocation_zip_code_prefix.
+        examples: ["13023", "13844", "20031"]
+      seller_city:
+        description: "Seller's city name (lowercase Portuguese)."
+        examples: ["campinas", "mogi guacu", "rio de janeiro"]
+      seller_state:
+        description: "Seller's state abbreviation (2-letter Brazilian state code)."
+        examples: ["SP", "RJ", "PR"]
+
+  products:
+    description: >
+      Product dimension table. Each row is a unique product listed on Olist.
+      Contains the product's category (in Portuguese) and physical attributes
+      (weight, dimensions). Category can be translated to English via the
+      category_translation table.
+    columns:
+      product_id:
+        description: "Unique identifier for the product. Joins to order_items.product_id."
+        examples: ["1e9e8ef04dbcff4541ed26657ea517e5"]
+      product_category_name:
+        description: >
+          Product category name in Portuguese. Joins to
+          category_translation.product_category_name for the English translation.
+          Nullable — some products have no category.
+        examples: ["perfumaria", "artes", "esporte_lazer", "moveis_decoracao"]
+      product_name_lenght:
+        description: >
+          Number of characters in the product name. Note: column name has a
+          typo ('lenght') in the original dataset — preserved as-is.
+        examples: ["40", "44", "46"]
+      product_description_lenght:
+        description: >
+          Number of characters in the product description. Same typo as above.
+        examples: ["287", "276", "250"]
+      product_photos_qty:
+        description: "Number of product photos published by the seller."
+        examples: ["1", "2", "4"]
+      product_weight_g:
+        description: "Product weight in grams."
+        examples: ["225", "1000", "154"]
+      product_length_cm:
+        description: "Product package length in centimeters."
+        examples: ["16", "30", "18"]
+      product_height_cm:
+        description: "Product package height in centimeters."
+        examples: ["10", "18", "9"]
+      product_width_cm:
+        description: "Product package width in centimeters."
+        examples: ["14", "20", "15"]
+
+  category_translation:
+    description: >
+      Lookup table that maps Portuguese product category names to English.
+      71 rows. Join to products.product_category_name to get English category names
+      for reporting or display.
+    columns:
+      product_category_name:
+        description: "Product category in Portuguese. Primary key. Joins to products.product_category_name."
+        examples: ["beleza_saude", "informatica_acessorios", "automotivo"]
+      product_category_name_english:
+        description: "English translation of the product category."
+        examples: ["health_beauty", "computers_accessories", "auto"]
+
+  orders:
+    description: >
+      Central fact table. Each row is one order placed on the Olist marketplace.
+      Contains the order lifecycle timestamps (purchase, approval, carrier handoff,
+      delivery) and current status. Joins to customers (1:1 via customer_id),
+      order_items (1:N), order_payments (1:N), and order_reviews (1:1 typically).
+    columns:
+      order_id:
+        description: "Unique identifier for the order. Primary key. Referenced by order_items, order_payments, and order_reviews."
+        examples: ["e481f51cbdc54678b7cc49136f2d6af7"]
+      customer_id:
+        description: "Foreign key to customers.customer_id. Each order has exactly one customer."
+        examples: ["9ef432eb6251297304e76186b10a928d"]
+      order_status:
+        description: >
+          Current status of the order. Values: created, approved, invoiced,
+          processing, shipped, delivered, unavailable, canceled. The vast majority
+          (~97%) are 'delivered'.
+        examples: ["delivered", "shipped", "canceled", "invoiced", "processing", "unavailable", "created", "approved"]
+      order_purchase_timestamp:
+        description: "Timestamp when the customer completed the purchase."
+        examples: ["2017-10-02 10:56:33"]
+      order_approved_at:
+        description: "Timestamp when the payment was approved. May be null if not yet approved."
+        examples: ["2017-10-02 11:07:15"]
+      order_delivered_carrier_date:
+        description: "Timestamp when the order was handed off to the logistics carrier."
+        examples: ["2017-10-04 19:55:00"]
+      order_delivered_customer_date:
+        description: "Timestamp when the customer actually received the order."
+        examples: ["2017-10-10 21:25:13"]
+      order_estimated_delivery_date:
+        description: "Estimated delivery date shown to the customer at purchase time."
+        examples: ["2017-10-18"]
+
+  order_items:
+    description: >
+      Line-item fact table. Each row is one item within an order. An order can
+      have multiple items, each potentially from a different seller and product.
+      Contains the item price and freight cost. This is the main table for
+      revenue/sales analysis — sum price for GMV, sum freight_value for shipping revenue.
+    columns:
+      order_id:
+        description: "Foreign key to orders.order_id."
+        examples: ["00010242fe8c5a6d1ba2dd792cb16214"]
+      order_item_id:
+        description: >
+          Sequential number identifying each item within an order (1, 2, 3...).
+          Part of the composite primary key (order_id, order_item_id).
+        examples: ["1", "2", "3"]
+      product_id:
+        description: "Foreign key to products.product_id."
+        examples: ["4244733e06e7ecb4970a6e2683c13e61"]
+      seller_id:
+        description: "Foreign key to sellers.seller_id. The seller who fulfills this item."
+        examples: ["48436dade18ac8b2bce089ec2a041202"]
+      shipping_limit_date:
+        description: >
+          Deadline for the seller to hand the item to the logistics carrier.
+          If the seller misses this date, the order may be canceled.
+        examples: ["2017-09-19 09:45:35"]
+      price:
+        description: "Item price in Brazilian Real (BRL). Does not include freight."
+        examples: ["58.9", "239.9", "199.0"]
+      freight_value:
+        description: >
+          Freight cost for this item in BRL. If an order has multiple items,
+          each item has its own freight_value (freight is split across items).
+        examples: ["13.29", "19.93", "17.87"]
+
+  order_payments:
+    description: >
+      Payment fact table. Each row is one payment installment for an order. An
+      order may have multiple payment rows if the customer used more than one
+      payment method (e.g., credit card + voucher). Use payment_sequential to
+      distinguish them. Sum payment_value grouped by order_id to get total paid.
+    columns:
+      order_id:
+        description: "Foreign key to orders.order_id."
+        examples: ["b81ef226f3fe1789b1e8b2acac839d17"]
+      payment_sequential:
+        description: >
+          Sequence number for payments within the same order (1, 2, 3...).
+          Most orders have only 1. Multiple values indicate split payment.
+          Part of composite primary key (order_id, payment_sequential).
+        examples: ["1", "2"]
+      payment_type:
+        description: "Payment method used. Values: credit_card, boleto (bank slip), voucher, debit_card."
+        examples: ["credit_card", "boleto", "voucher", "debit_card"]
+      payment_installments:
+        description: >
+          Number of installments chosen by the customer (for credit card payments).
+          1 means paid in full. Common in Brazilian e-commerce to split into
+          multiple monthly installments.
+        examples: ["1", "3", "8", "10"]
+      payment_value:
+        description: "Amount paid in this payment row, in BRL."
+        examples: ["99.33", "24.39", "65.71"]
+
+  order_reviews:
+    description: >
+      Customer review table. Each row is a review submitted after order delivery.
+      Contains a 1–5 star rating and optional text comment. Typically one review
+      per order, but review_id is not unique (some duplicates exist in the dataset).
+    columns:
+      review_id:
+        description: >
+          Identifier for the review. Not unique — the dataset contains some
+          duplicate review_id values. Do not use as a primary key.
+        examples: ["7bc2406110b926393aa56f80a40eba40"]
+      order_id:
+        description: "Foreign key to orders.order_id."
+        examples: ["73fc7af87114b39712e6da79b0a377eb"]
+      review_score:
+        description: "Customer satisfaction rating from 1 (worst) to 5 (best)."
+        examples: ["1", "2", "3", "4", "5"]
+      review_comment_title:
+        description: "Optional short title for the review (in Portuguese). Often null."
+        examples: []
+      review_comment_message:
+        description: "Optional free-text review body (in Portuguese). Often null."
+        examples: []
+      review_creation_date:
+        description: "Date the review survey was sent to the customer."
+        examples: ["2018-01-18"]
+      review_answer_timestamp:
+        description: "Timestamp when the customer submitted the review response."
+        examples: ["2018-01-18 21:46:59"]
+
+  geolocation:
+    description: >
+      Geographic coordinate lookup table. Maps Brazilian zip code prefixes to
+      latitude/longitude. Contains ~1M rows with many duplicates per zip code
+      (multiple coordinate readings). Not deduplicated — if you need one lat/lng
+      per zip, aggregate (e.g., AVG). Joins to customers or sellers via
+      zip_code_prefix.
+    columns:
+      geolocation_zip_code_prefix:
+        description: "First 5 digits of the zip code. Joins to customer_zip_code_prefix or seller_zip_code_prefix."
+        examples: ["01037", "01046", "13023"]
+      geolocation_lat:
+        description: "Latitude coordinate for this zip code."
+        examples: ["-23.545", "-22.905"]
+      geolocation_lng:
+        description: "Longitude coordinate for this zip code."
+        examples: ["-46.639", "-43.172"]
+      geolocation_city:
+        description: "City name (lowercase Portuguese)."
+        examples: ["sao paulo", "rio de janeiro"]
+      geolocation_state:
+        description: "State abbreviation (2-letter Brazilian state code)."
+        examples: ["SP", "RJ", "MG"]
