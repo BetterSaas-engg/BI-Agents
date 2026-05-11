@@ -6,6 +6,72 @@ Every entry has: **what was decided**, **why**, **what alternatives were conside
 
 ---
 
+## 2026-05-11 — Phase 4, round 3, semantic layer design (planning session)
+
+- **What was decided:** A semantic layer for named business metrics, to be implemented as the next build round. Seven decisions were made in this session, listed below. No code was written.
+- **Why:** Three eval failures across rounds 1 and 2 — cancellation_rate, average_order_value, payment_trend — pointed at the same root cause: undefined business metrics get re-interpreted on each run, and the agent silently picks among defensible alternatives. SPEC.md flagged this as [OPEN — Phase 4]. Three data points is enough evidence to act.
+
+**The seven decisions:**
+
+1. **Metric shape: Hybrid** — each metric defined with a natural-language description, a canonical SQL fragment, and structured fields. Combines the readability of documentation, the determinism of SQL fragments, and the queryability of structured definitions.
+2. **Schema: Four fields.** `description` (required, prose), `sql` (required, SQL fragment), `grain` (required: the entity being aggregated — orders, customers, items, reviews, payments), `synonyms` (optional list of strings for retrieval).
+3. **Retrieval: Embedding-based**, using the same sentence-transformers model and NumPy index pattern as the existing schema retriever. Mirrors the day-1 decision to "build the muscle" even at small scale.
+4. **Pipeline position:** Fills the existing semantics stage stub in `src/bi_agent/semantics.py`. SPEC-aligned — the stub was designed precisely for this.
+5. **Binding strength: Mandatory-with-composition.** When a metric is matched, its SQL fragment MUST appear in the agent's output SQL. The agent may wrap the fragment in SELECT, GROUP BY, WHERE, joins, etc. — but may not redefine it. Advisory was considered and rejected: advisory is what the agent already does today, and it's what produced the AOV regression. A real semantic layer is authoritative or it's just documentation.
+6. **v0 metric set: Three metrics** chosen to cover distinct shapes. `cancellation_rate` (scalar ratio, evidence from round 1), `average_order_value` (scalar aggregation with definitional ambiguity, evidence from round 1), `average_review_score` (composable aggregation, tests "by seller" / "by category" composition).
+7. **Eval changes: Option 1b — flag mismatches, don't hard-fail.** Two checks run for each metric-relevant question: (a) fragment-use (canonical SQL fragment appears in agent output), (b) execution equivalence (agent's SQL produces same result as a reference query built from the metric definition). Mismatches between the two are logged, but neither alone is a hard fail. Gives data on contract use without forcing a binary judgment before we have evidence the contract is right.
+
+**Alternatives considered and rejected:**
+
+- Pure SQL fragments (no description/structure) — too rigid for v0, teaches less
+- Pure natural-language definitions — too close to what the agent already does, no real contract
+- Static dump of all metrics in the prompt instead of retrieval — too inconsistent with the schema retrieval choice and skips a real learning opportunity
+- Advisory binding — recreates the original problem
+- Hard-failing on fragment use — premature before retrieval and metric definitions are eval-validated
+
+**Out of scope, deliberately:**
+
+- `payment_trend` is not in the v0 metric set. It is an analytical-lens question ("trends") rather than a named calculation. Logged as a finding: not every BI failure is a metric-definition failure. May warrant a different abstraction (e.g. visualization hints) in a later round.
+- Retrieval confidence threshold (tuning during build/eval, not design-time)
+- The dry_run thread (separate round)
+
+- **Reversibility:** High at this stage — no code written. Medium once built: the metrics file is YAML and trivially editable; the retrieval index rebuilds in seconds; the agent's binding behavior is one prompt instruction; eval checks are additive. The largest commitment is the `description` + `sql` + `grain` + `synonyms` schema — changing field shape later means editing every metric.
+- **Next step:** Draft `docs/SEMANTIC_LAYER.md` as the build contract before any code is written.
+
+---
+
+## 2026-05-11 — Phase 4, round 2, fix C-lite (reverted)
+
+- **What was attempted:** Added a `finish_with_assumptions` tool to the SQL agent so it could declare ambiguity-resolution assumptions as a structured terminal call. Option B (tool-as-contract) chosen over option A (parse prose from final message) on cleanliness grounds.
+- **Result:** Reverted. Token usage roughly doubled (146K → 319K input tokens across the golden set), 3 questions hit budget exhaustion (was 0), 6 regressions vs 2 improvements. Shape pass rate held at 94% but avg overall dropped from 4.59 to 4.09.
+- **Why it failed:** Every question now required an extra LLM round-trip — the agent can't declare assumptions until it has seen `run_sql` results, so `run_sql` and `finish_with_assumptions` can't be parallel tool calls. The terminal-tool pattern adds a guaranteed +1 iteration per question, which doesn't matter for simple queries but pushes complex ones past the iteration budget.
+- **Lesson:** Terminal-tool patterns have a fixed cost we didn't price. When we picked B over A, we chose a clean contract without measuring it. A clean contract that costs 2x tokens may be worse than a fragile one that costs nothing — depending on what we're optimizing for. In this project we're optimizing for legible failures and insight per dollar, and this contract was neither legible (the cost was hidden) nor cheap.
+- **Alternatives still on the table for the AOV / payment-trends / ambiguous-wording cluster:**
+  - Option 1 from earlier (presenter-only assumption declaration) — cheap, no agent loop changes
+  - Assumptions as a parameter on `run_sql` itself (commit before seeing result) — closer to BI-engineer mental model
+  - A real semantic layer (option C from the very first round) — bigger swing, more evidence still needed
+- **Reversibility:** Done — all changes undone.
+
+---
+
+## 2026-05-11 — Phase 4, round 1, fix A (shipped)
+
+- **Decision:** Added instruction #11 to SQL agent system prompt, targeting result-shape mismatch for rate/ratio/percentage questions. Concrete example included (cancellation_rate using FILTER).
+- **Why:** Cancellation-rate eval failure showed agent understood "rate" conceptually (computed 0.63% in explanation) but returned a GROUP BY status breakdown in SQL. Testing the cheap hypothesis first: does telling the agent fix it, or is the bug structural?
+- **Result:** Worked. Cancellation rate flipped to pass (3.33 → 5.0). Overall: shape pass rate 89% → 94%, avg overall 4.26 → 4.59. 5 questions improved, 12 unchanged. The hint generalized beyond the target question.
+- **Alternatives considered:** B (parser extracts result_shape hint), C (real semantic layer). Both deferred. A worked, so structural fixes aren't yet justified by this failure.
+- **Reversibility:** Trivial — one prompt rule.
+- **Open thread:** Rule #2 ("ALWAYS call dry_run") is still being ignored in some traces. Investigate separately.
+
+## 2026-05-11 — Phase 4, round 1, AOV regression (evidence, not a fix)
+
+- **What was observed:** semantic_02 ("What is the average order value?") regressed from 5.0 to 3.67 between baseline and fix-A runs. SQL changed from SUM(price) to SUM(price + freight_value) — a defensible but different interpretation of "order value." Result moved from 137.75 to 160.58 BRL.
+- **Why this matters:** Both interpretations are defensible. The golden set encodes one definition; the agent picked the other this run. This is the failure mode a semantic layer is designed to solve — named business metrics (AOV, cancellation rate, churn rate) should have one definition the system looks up, not re-derives on each call.
+- **Decision:** No fix. Logged as evidence. This is the second data point pointing at the same root cause (cancellation rate was the first). When the third arrives, revisit the semantic-layer decision ([OPEN — Phase 4] in SPEC.md).
+- **Reversibility:** N/A — no change made.
+
+---
+
 ## 2026-05-10 — Phase 3 baseline
 
 First eval run against the 18-question golden set. This is the starting point for Phase 4 iteration.
